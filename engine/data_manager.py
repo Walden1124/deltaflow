@@ -5,20 +5,35 @@ import time
 import pandas as pd
 import numpy as np
 
+# Module-level in-memory cache — more reliable than class attributes on Streamlit Cloud
+_CACHE: dict = {}
+
+def _cache_get(key: str, ttl: float):
+    """Returns cached data if it exists and hasn't expired, else None."""
+    try:
+        entry = _CACHE.get(key)
+        if entry and (time.time() - entry["ts"]) < ttl:
+            return entry["data"]
+    except Exception:
+        pass
+    return None
+
+def _cache_set(key: str, data):
+    """Stores data in the module-level cache."""
+    try:
+        _CACHE[key] = {"data": data, "ts": time.time()}
+    except Exception:
+        pass
+
 class DataManager:
     """
     Manages financial data ingestion from yfinance with an in-memory cache
     to reduce redundant API calls and prevent rate limiting on Streamlit Cloud.
     """
 
-    # Class-level shared cache (persists across Streamlit re-runs within the same session)
-    _cache: dict = {}
-
     def __init__(self):
         self.yf = yf
-        self.cache_enabled = True
-        # Default cache expiration: 15 minutes (900 seconds)
-        self.cache_ttl = 900
+        self.cache_ttl = 900  # 15 min default TTL
 
     def get_stock_data(self, ticker: str) -> dict:
         """
@@ -33,19 +48,16 @@ class DataManager:
         ticker = ticker.upper()
         cache_key = f"deltaflow:stock_data:{ticker}"
 
-        # Check in-memory cache
-        cached = DataManager._cache.get(cache_key)
-        if cached and (time.time() - cached["ts"]) < self.cache_ttl:
-            return cached["data"]
+        cached = _cache_get(cache_key, self.cache_ttl)
+        if cached is not None:
+            return cached
 
-        # Fetch from yfinance if not cached
         stock = yf.Ticker(ticker)
         try:
             info = stock.info
         except Exception:
             return {"error": f"Failed to fetch data for {ticker}"}
 
-        # Extract only the necessary data to keep the payload lightweight
         data = {
             "symbol": ticker,
             "current_price": info.get("currentPrice", info.get("previousClose", 0.0)),
@@ -57,7 +69,7 @@ class DataManager:
             "sector": info.get("sector", "Unknown")
         }
 
-        DataManager._cache[cache_key] = {"data": data, "ts": time.time()}
+        _cache_set(cache_key, data)
         return data
 
     def calculate_historical_volatility(self, ticker: str, window: int = 30) -> float:
@@ -80,15 +92,13 @@ class DataManager:
         return float(hv)
 
     def get_options_expirations(self, ticker: str) -> list:
-        """
-        Fetches available options expiration dates.
-        """
+        """Fetches available options expiration dates."""
         ticker = ticker.upper()
         cache_key = f"deltaflow:options_expirations:{ticker}"
 
-        cached = DataManager._cache.get(cache_key)
-        if cached and (time.time() - cached["ts"]) < 43200:  # 12 hour TTL
-            return cached["data"]
+        cached = _cache_get(cache_key, 43200)  # 12 hour TTL
+        if cached is not None:
+            return cached
 
         stock = yf.Ticker(ticker)
         try:
@@ -96,22 +106,19 @@ class DataManager:
         except Exception:
             return []
 
-        DataManager._cache[cache_key] = {"data": expirations, "ts": time.time()}
+        _cache_set(cache_key, expirations)
         return expirations
 
     def get_options_chain(self, ticker: str, expiration: str) -> dict:
-        """
-        Fetches the options chain for a specific ticker and expiration date.
-        """
+        """Fetches the options chain for a specific ticker and expiration date."""
         ticker = ticker.upper()
         cache_key = f"deltaflow:options_chain:{ticker}:{expiration}"
 
-        cached = DataManager._cache.get(cache_key)
-        if cached and (time.time() - cached["ts"]) < 300:  # 5 min TTL
-            data = cached["data"]
+        cached = _cache_get(cache_key, 300)  # 5 min TTL
+        if cached is not None:
             return {
-                "calls": pd.DataFrame(data["calls"]),
-                "puts": pd.DataFrame(data["puts"])
+                "calls": pd.DataFrame(cached["calls"]),
+                "puts": pd.DataFrame(cached["puts"])
             }
 
         stock = yf.Ticker(ticker)
@@ -124,7 +131,7 @@ class DataManager:
         except Exception:
             return {"error": f"Failed to fetch options chain for {ticker} at {expiration}"}
 
-        DataManager._cache[cache_key] = {"data": data, "ts": time.time()}
+        _cache_set(cache_key, data)
         return {
             "calls": chain.calls,
             "puts": chain.puts
@@ -270,15 +277,13 @@ class DataManager:
         }
 
     def get_company_profile(self, ticker: str) -> dict:
-        """
-        Fetches detailed company profile information for the UI modal.
-        """
+        """Fetches detailed company profile information for the UI modal."""
         ticker = ticker.upper()
         cache_key = f"deltaflow:company_profile:{ticker}"
 
-        cached = DataManager._cache.get(cache_key)
-        if cached and (time.time() - cached["ts"]) < 86400:  # 24 hour TTL
-            return cached["data"]
+        cached = _cache_get(cache_key, 86400)  # 24 hour TTL
+        if cached is not None:
+            return cached
 
         stock = yf.Ticker(ticker)
         try:
@@ -295,7 +300,7 @@ class DataManager:
         except Exception:
             return {"error": "Failed to fetch company profile."}
 
-        DataManager._cache[cache_key] = {"data": data, "ts": time.time()}
+        _cache_set(cache_key, data)
         return data
         
     def get_company_news(self, ticker: str) -> list:
@@ -305,9 +310,9 @@ class DataManager:
         ticker = ticker.upper()
         cache_key = f"deltaflow:company_news:{ticker}"
 
-        cached = DataManager._cache.get(cache_key)
-        if cached and (time.time() - cached["ts"]) < 3600:  # 1 hour TTL
-            return cached["data"]
+        cached = _cache_get(cache_key, 3600)  # 1 hour TTL
+        if cached is not None:
+            return cached
 
         stock = yf.Ticker(ticker)
         try:
@@ -356,5 +361,5 @@ class DataManager:
         except Exception:
             return []
 
-        DataManager._cache[cache_key] = {"data": articles, "ts": time.time()}
+        _cache_set(cache_key, articles)
         return articles
