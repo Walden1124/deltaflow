@@ -85,46 +85,34 @@ class DataManager:
         """
         ticker = ticker.upper()
         cache_key = f"deltaflow:options_expirations:{ticker}"
-        
-        if self.cache_enabled:
-            cached_data = self.cache.get(cache_key)
-            if cached_data:
-                return json.loads(cached_data)
-                
+
+        cached = DataManager._cache.get(cache_key)
+        if cached and (time.time() - cached["ts"]) < 43200:  # 12 hour TTL
+            return cached["data"]
+
         stock = yf.Ticker(ticker)
         try:
             expirations = list(stock.options)
         except Exception:
             return []
-            
-        if self.cache_enabled:
-            # Cache expirations for longer (12 hours) as they don't change frequently intra-day
-            self.cache.setex(cache_key, 43200, json.dumps(expirations))
-            
+
+        DataManager._cache[cache_key] = {"data": expirations, "ts": time.time()}
         return expirations
 
     def get_options_chain(self, ticker: str, expiration: str) -> dict:
         """
         Fetches the options chain for a specific ticker and expiration date.
-
-        Args:
-            ticker (str): The stock ticker symbol.
-            expiration (str): The expiration date string (YYYY-MM-DD).
-
-        Returns:
-            dict: Dictionary containing calls and puts DataFrames.
         """
         ticker = ticker.upper()
         cache_key = f"deltaflow:options_chain:{ticker}:{expiration}"
 
-        if self.cache_enabled:
-            cached_data = self.cache.get(cache_key)
-            if cached_data:
-                data = json.loads(cached_data)
-                return {
-                    "calls": pd.DataFrame(data["calls"]),
-                    "puts": pd.DataFrame(data["puts"])
-                }
+        cached = DataManager._cache.get(cache_key)
+        if cached and (time.time() - cached["ts"]) < 300:  # 5 min TTL
+            data = cached["data"]
+            return {
+                "calls": pd.DataFrame(data["calls"]),
+                "puts": pd.DataFrame(data["puts"])
+            }
 
         stock = yf.Ticker(ticker)
         try:
@@ -136,10 +124,7 @@ class DataManager:
         except Exception:
             return {"error": f"Failed to fetch options chain for {ticker} at {expiration}"}
 
-        if self.cache_enabled:
-            # Cache chain for 5 minutes (300 seconds) for real-time responsiveness
-            self.cache.setex(cache_key, 300, json.dumps(data))
-
+        DataManager._cache[cache_key] = {"data": data, "ts": time.time()}
         return {
             "calls": chain.calls,
             "puts": chain.puts
@@ -290,12 +275,11 @@ class DataManager:
         """
         ticker = ticker.upper()
         cache_key = f"deltaflow:company_profile:{ticker}"
-        
-        if self.cache_enabled:
-            cached_data = self.cache.get(cache_key)
-            if cached_data:
-                return json.loads(cached_data)
-                
+
+        cached = DataManager._cache.get(cache_key)
+        if cached and (time.time() - cached["ts"]) < 86400:  # 24 hour TTL
+            return cached["data"]
+
         stock = yf.Ticker(ticker)
         try:
             info = stock.info
@@ -310,10 +294,8 @@ class DataManager:
             }
         except Exception:
             return {"error": "Failed to fetch company profile."}
-            
-        if self.cache_enabled:
-            self.cache.setex(cache_key, 86400, json.dumps(data)) # Cache for 24 hours
-            
+
+        DataManager._cache[cache_key] = {"data": data, "ts": time.time()}
         return data
         
     def get_company_news(self, ticker: str) -> list:
@@ -322,65 +304,57 @@ class DataManager:
         """
         ticker = ticker.upper()
         cache_key = f"deltaflow:company_news:{ticker}"
-        
-        if self.cache_enabled:
-            cached_data = self.cache.get(cache_key)
-            if cached_data:
-                return json.loads(cached_data)
-                
+
+        cached = DataManager._cache.get(cache_key)
+        if cached and (time.time() - cached["ts"]) < 3600:  # 1 hour TTL
+            return cached["data"]
+
         stock = yf.Ticker(ticker)
         try:
             news = stock.news
-            
+
             # Attempt to get a short company name for filtering
             try:
                 comp_name = stock.info.get("shortName", ticker).split(" ")[0].lower()
-            except:
+            except Exception:
                 comp_name = ticker.lower()
-                
+
             articles = []
             for item in news:
                 content = item.get("content", item)
                 title = content.get("title", "News Article")
-                
-                # Filter out generic syndicated news (very common with Yahoo Finance)
-                # Ensure the ticker or the company name is actually in the title or summary
+
+                # Filter out generic syndicated news
                 searchable_text = (title + " " + content.get("summary", "")).lower()
                 if ticker.lower() not in searchable_text and comp_name not in searchable_text:
-                    # Allow broad index ETFs to show general market news
                     if ticker not in ["SPY", "QQQ", "DIA", "IWM"]:
                         continue
-                        
+
                 provider = content.get("provider", {})
                 publisher = provider.get("displayName", "Source") if isinstance(provider, dict) else "Source"
-                
-                # pubDate is usually ISO format 'YYYY-MM-DDTHH:MM:SSZ'
+
                 pub_date = content.get("pubDate", "")
                 if "T" in pub_date:
                     pub_date = pub_date.replace("T", " ")[:16]
-                    
-                # Safely extract URL since yfinance now returns dictionaries for links
+
                 raw_link = content.get("canonicalUrl", content.get("clickThroughUrl", content.get("link", "#")))
                 if isinstance(raw_link, dict):
                     link = raw_link.get("url", "#")
                 else:
                     link = raw_link
-                    
+
                 articles.append({
                     "title": title,
                     "publisher": publisher,
                     "link": link,
                     "timestamp_str": pub_date
                 })
-                
-                # Only grab top 5 highly-relevant articles
+
                 if len(articles) >= 5:
                     break
-                    
+
         except Exception:
             return []
-            
-        if self.cache_enabled:
-            self.cache.setex(cache_key, 3600, json.dumps(articles)) # Cache for 1 hour
-            
+
+        DataManager._cache[cache_key] = {"data": articles, "ts": time.time()}
         return articles
