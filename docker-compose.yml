@@ -1,0 +1,31 @@
+docker-compose up --buildversion: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: deltaflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+
+  streamlit:
+    build: .
+    container_name: deltaflow-app
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Set your Supabase credentials in a .env file or Streamlit secrets
+      # - SUPABASE_URL=${SUPABASE_URL}
+      # - SUPABASE_KEY=${SUPABASE_KEY}
+    depends_on:
+      - redis
+    command: streamlit run app.py --server.address=0.0.0.0
+
+volumes:
+  redis_data:
