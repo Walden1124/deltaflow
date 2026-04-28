@@ -1,28 +1,22 @@
 import yfinance as yf
-import redis
 import json
 import os
+import time
 import pandas as pd
 import numpy as np
 
 class DataManager:
     """
-    Manages financial data ingestion from yfinance with a robust Redis caching layer
-    to handle high traffic and prevent API rate limiting.
+    Manages financial data ingestion from yfinance with an in-memory cache
+    to reduce redundant API calls and prevent rate limiting on Streamlit Cloud.
     """
+
+    # Class-level shared cache (persists across Streamlit re-runs within the same session)
+    _cache: dict = {}
 
     def __init__(self):
         self.yf = yf
-        redis_host = os.environ.get("REDIS_HOST", "localhost")
-        redis_port = int(os.environ.get("REDIS_PORT", 6379))
-        try:
-            self.cache = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
-            self.cache.ping()
-            self.cache_enabled = True
-        except redis.ConnectionError:
-            print("Warning: Redis cache not available. Falling back to direct API calls.")
-            self.cache_enabled = False
-            
+        self.cache_enabled = True
         # Default cache expiration: 15 minutes (900 seconds)
         self.cache_ttl = 900
 
@@ -39,10 +33,10 @@ class DataManager:
         ticker = ticker.upper()
         cache_key = f"deltaflow:stock_data:{ticker}"
 
-        if self.cache_enabled:
-            cached_data = self.cache.get(cache_key)
-            if cached_data:
-                return json.loads(cached_data)
+        # Check in-memory cache
+        cached = DataManager._cache.get(cache_key)
+        if cached and (time.time() - cached["ts"]) < self.cache_ttl:
+            return cached["data"]
 
         # Fetch from yfinance if not cached
         stock = yf.Ticker(ticker)
@@ -63,9 +57,7 @@ class DataManager:
             "sector": info.get("sector", "Unknown")
         }
 
-        if self.cache_enabled:
-            self.cache.setex(cache_key, self.cache_ttl, json.dumps(data))
-
+        DataManager._cache[cache_key] = {"data": data, "ts": time.time()}
         return data
 
     def calculate_historical_volatility(self, ticker: str, window: int = 30) -> float:
